@@ -48,25 +48,27 @@ module.exports = function(socket, opts) {
     socket.emit(_type, _content);
   }
 
-  function init() {
-    function _connected() {
-      if (enterMessageType) {
-        bufferMessage({}, enterMessageType);
-      }
-      queuedMessages.splice(0).forEach(function(_message) {
-          bufferMessage(_message.content, _message.type);
-      });
-      signaller('connected');
+  function _connected() {
+    if (enterMessageType) {
+      bufferMessage({}, enterMessageType);
     }
-    
+    queuedMessages.splice(0).forEach(function (_message) {
+      bufferMessage(_message.content, _message.type);
+    });
+    signaller('connected');
+  }
+
+  function _disconnected() {
+    signaller('disconnected');
+  }
+
+  function init() {
     socket.on('connect', _connected);
     if (socket && socket.connected) {
-        _connected();
+      _connected();
     }
 
-    socket.on('disconnect', function() {
-      signaller('disconnected');
-    });
+    socket.on('disconnect', _disconnected);
 
     socket.on('rtc-signal', signaller._process);
     return signaller;
@@ -86,15 +88,36 @@ module.exports = function(socket, opts) {
     return announceTimer = setTimeout(signaller._announce, (opts || {}).announceDelay || 10);
   };
 
-  signaller.leave = signaller.close = function() {
-    queuedMessages = [];
+  signaller.leave = signaller.close = function () {
+    queuedMessages = []; //empty queue in case of re-use
     if (leaveMessageType) {
-      if (socket && socket.connected) {
-        socket.emit(leaveMessageType, {});
+      if (socket) {
+        if (socket.connected) {
+          //If we still have an operational socket, politely tell we are leaving
+          socket.emit(leaveMessageType, {});
+        }
+        //Remove events as the socket might be used later and we don't want to interfere
+        socket.removeListener('connect', _connected);
+        socket.removeListener('disconnect', _disconnected);
+        socket.removeListener('rtc-signal', signaller._process);
       }
+      signaller('disconnected'); //Force the disconnected signal because that's the end for the signaller's life
       return true;
     } else {
-      return socket && socket.disconnect();
+      if (!socket) {
+        return true; //No socket, nothing to do
+      }
+      //Remove events
+      socket.removeListener('connect', _connected);
+      socket.removeListener('disconnect', _disconnected);
+      socket.removeListener('rtc-signal', signaller._process);
+      if (!socket.connected) {
+        //Socket is connected, we signal disconnection manually because we removed events and disconnect the socket
+        signaller('disconnected');
+        return socket.disconnect();
+      } else {
+        return true; //Already disconnected nothing to do
+      }
     }
   };
 
