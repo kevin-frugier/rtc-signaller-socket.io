@@ -30,23 +30,39 @@ var reTrailingSlash = /\/$/;
 module.exports = function(socket, opts) {
   // create the signaller
   var announceTimer;
+  var enterMessageType = (opts || {}).enterMessage;
+  var leaveMessageType = (opts || {}).leaveMessage;
   var signaller = require('rtc-signal/signaller')(opts, bufferMessage);
   var queuedMessages = [];
   
-  function bufferMessage(message) {
+  function bufferMessage(content, type) {
+    var _type = (type || 'rtc-signal');
+    var _content = (content || {});
     var connected = socket && socket.connected;
     if (! connected) {
-      return queuedMessages.push(message);
+      return queuedMessages.push({
+        content : _content,
+        type : _type
+      });
     }
-
-    socket.emit('rtc-signal', message);
+    socket.emit(_type, _content);
   }
 
   function init() {
-    socket.on('connect', function() {
-      queuedMessages.splice(0).forEach(bufferMessage);
+    function _connected() {
+      if (enterMessageType) {
+        bufferMessage({}, enterMessageType);
+      }
+      queuedMessages.splice(0).forEach(function(_message) {
+          bufferMessage(_message.content, _message.type);
+      });
       signaller('connected');
-    });
+    }
+    
+    socket.on('connect', _connected);
+    if (socket && socket.connected) {
+        _connected();
+    }
 
     socket.on('disconnect', function() {
       signaller('disconnected');
@@ -71,7 +87,15 @@ module.exports = function(socket, opts) {
   };
 
   signaller.leave = signaller.close = function() {
-    return socket && socket.disconnect();
+    queuedMessages = [];
+    if (leaveMessageType) {
+      if (socket && socket.connected) {
+        socket.emit(leaveMessageType, {});
+      }
+      return true;
+    } else {
+      return socket && socket.disconnect();
+    }
   };
 
   return init();
